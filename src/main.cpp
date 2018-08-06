@@ -84,68 +84,140 @@ int main() {
         auto j = json::parse(s);
         string event = j[0].get<string>();
         if (event == "telemetry") {
-          // j[1] is the data JSON object
-          vector<double> ptsx = j[1]["ptsx"];
-          vector<double> ptsy = j[1]["ptsy"];
-          double px = j[1]["x"];
-          double py = j[1]["y"];
-          double psi = j[1]["psi"];
-          double v = j[1]["speed"];
+            // j[1] is the data JSON object
+            vector<double> ptsx = j[1]["ptsx"];
+            vector<double> ptsy = j[1]["ptsy"];
+            double px = j[1]["x"];
+            double py = j[1]["y"];
+            double psi = j[1]["psi"];
+            double v = j[1]["speed"];
+            //Below values used for predicting next values.
+            double delta = j[1]["steering_angle"];
+            double a = j[1]["throttle"];
 
-          /*
-          * TODO: Calculate steering angle and throttle using MPC.
-          *
-          * Both are in between [-1, 1].
-          *
-          */
-          double steer_value;
-          double throttle_value;
+            /*
+            * TODO: Calculate steering angle and throttle using MPC.
+            *
+            * Both are in between [-1, 1].
+            *
+            */
+            
+            for (u_int i = 0; i < ptsx.size(); i++) {
+                double shift_x = ptsx[i] - px;
+                double shift_y = ptsy[i] - py;
+            
+                ptsx[i] = shift_x * cos(psi) + shift_y * sin(psi);
+                ptsy[i] = shift_y * cos(psi) - shift_x * sin(psi);
+            }
+            
+            double* ptrx = &ptsx[0];
+            Eigen::Map<Eigen::VectorXd> ptsx_eig(ptrx, 6);
+            double* ptry = &ptsy[0];
+            Eigen::Map<Eigen::VectorXd> ptsy_eig(ptry, 6);
+            
+            auto coeffs = polyfit(ptsx_eig, ptsy_eig, 3);
+            
+            // calculate cte and epsi
+            // Crosstrack error. Note: X and Y coords are converted to car coords
+            double cte = polyeval(coeffs, 0);
+            // For the orientation error, since x = 0, all higher orders become 0.
+            double epsi = -atan(coeffs[1]);
+            
+            
+            // Equations for the model: 
+            // x_[t+1] = x[t] + v[t] * cos(psi[t]) * dt
+            // y_[t+1] = y[t] + v[t] * sin(psi[t]) * dt
+            // psi_[t+1] = psi[t] + v[t] / Lf * delta[t] * dt
+            // v_[t+1] = v[t] + a[t] * dt
+            // cte[t+1] = f(x[t]) - y[t] + v[t] * sin(epsi[t]) * dt
+            // epsi[t+1] = psi[t] - psides[t] + v[t] * delta[t] / Lf * dt
+            // Basically will use the above model to predict the values here.
+            
+            //Borrowed from helper video
+            const double Lf = 2.67;
+            
+            //Predict 0.1s ahead (our dt in MPC is also 0.1)
+            double dt = 0.1;
+            
+            //NOTE: Here x, y and psi are all 0 (origin). Hence several values shorten into:
+            double pred_px = v * dt;
+            double pred_py = 0; //sin(0) = 0
+            double pred_psi = - v / Lf * delta * dt;
+            double pred_v = v + a * dt;
+            double pred_cte = cte + (v * sin(epsi) * dt);
+            double pred_epsi = epsi + pred_psi;
+            
+            //Store the state values
+            Eigen::VectorXd state(6);
+            state << pred_px, pred_py, pred_psi, pred_v, pred_cte, pred_epsi;
+            
+            auto vars = mpc.Solve(state, coeffs);
+            
+            double steer_value = vars[0] / (deg2rad(25) * Lf);
+            double throttle_value = vars[1];
 
-          json msgJson;
-          // NOTE: Remember to divide by deg2rad(25) before you send the steering value back.
-          // Otherwise the values will be in between [-deg2rad(25), deg2rad(25] instead of [-1, 1].
-          msgJson["steering_angle"] = steer_value;
-          msgJson["throttle"] = throttle_value;
+            json msgJson;
+            // NOTE: Remember to divide by deg2rad(25) before you send the steering value back.
+            // Otherwise the values will be in between [-deg2rad(25), deg2rad(25] instead of [-1, 1].
+            msgJson["steering_angle"] = steer_value;
+            msgJson["throttle"] = throttle_value;
 
-          //Display the MPC predicted trajectory 
-          vector<double> mpc_x_vals;
-          vector<double> mpc_y_vals;
+            //Display the MPC predicted trajectory 
+            vector<double> mpc_x_vals;
+            vector<double> mpc_y_vals;
 
-          //.. add (x,y) points to list here, points are in reference to the vehicle's coordinate system
-          // the points in the simulator are connected by a Green line
+            //.. add (x,y) points to list here, points are in reference to the vehicle's coordinate system
+            // the points in the simulator are connected by a Green line
+            
+            for (u_int i = 2; i < vars.size(); i++) {
+                if(i%2 == 0){
+                    mpc_x_vals.push_back(vars[i]);
+                } else {
+                    mpc_y_vals.push_back(vars[i]);
+                }
+            }
 
-          msgJson["mpc_x"] = mpc_x_vals;
-          msgJson["mpc_y"] = mpc_y_vals;
+            msgJson["mpc_x"] = mpc_x_vals;
+            msgJson["mpc_y"] = mpc_y_vals;
 
-          //Display the waypoints/reference line
-          vector<double> next_x_vals;
-          vector<double> next_y_vals;
+            //Display the waypoints/reference line
+            vector<double> next_x_vals;
+            vector<double> next_y_vals;
 
-          //.. add (x,y) points to list here, points are in reference to the vehicle's coordinate system
-          // the points in the simulator are connected by a Yellow line
+            //.. add (x,y) points to list here, points are in reference to the vehicle's coordinate system
+            // the points in the simulator are connected by a Yellow line
+            
+            // Getting some help from the helper video
+            double poly_inc = 2.5;
+            u_int num_points = 25;
+            
+            for (u_int i = 0; i < num_points; i++) {
+                next_x_vals.push_back(poly_inc * i);
+                next_y_vals.push_back(polyeval(coeffs, poly_inc * i));
+            }
+            
+            msgJson["next_x"] = next_x_vals;
+            msgJson["next_y"] = next_y_vals;
 
-          msgJson["next_x"] = next_x_vals;
-          msgJson["next_y"] = next_y_vals;
 
-
-          auto msg = "42[\"steer\"," + msgJson.dump() + "]";
-          std::cout << msg << std::endl;
-          // Latency
-          // The purpose is to mimic real driving conditions where
-          // the car does actuate the commands instantly.
-          //
-          // Feel free to play around with this value but should be to drive
-          // around the track with 100ms latency.
-          //
-          // NOTE: REMEMBER TO SET THIS TO 100 MILLISECONDS BEFORE
-          // SUBMITTING.
-          this_thread::sleep_for(chrono::milliseconds(100));
-          ws.send(msg.data(), msg.length(), uWS::OpCode::TEXT);
+            auto msg = "42[\"steer\"," + msgJson.dump() + "]";
+            std::cout << msg << std::endl;
+            // Latency
+            // The purpose is to mimic real driving conditions where
+            // the car does actuate the commands instantly.
+            //
+            // Feel free to play around with this value but should be to drive
+            // around the track with 100ms latency.
+            //
+            // NOTE: REMEMBER TO SET THIS TO 100 MILLISECONDS BEFORE
+            // SUBMITTING.
+            this_thread::sleep_for(chrono::milliseconds(100));
+            ws.send(msg.data(), msg.length(), uWS::OpCode::TEXT);
         }
       } else {
-        // Manual driving
-        std::string msg = "42[\"manual\",{}]";
-        ws.send(msg.data(), msg.length(), uWS::OpCode::TEXT);
+            // Manual driving
+            std::string msg = "42[\"manual\",{}]";
+            ws.send(msg.data(), msg.length(), uWS::OpCode::TEXT);
       }
     }
   });
