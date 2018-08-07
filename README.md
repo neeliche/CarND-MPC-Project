@@ -3,6 +3,105 @@ Self-Driving Car Engineer Nanodegree Program
 
 ---
 
+## Reflections
+
+### The Model
+
+The system is designed using a simple kinematic model that does not take too many other dynamic parameters, such as tire slip, wind, loss of power, etc into the equation. The model update equations used for this project are as follows:
+
+ ![Model_equations](images/Model_equations.png)
+
+#### State parameters
+
+These are the parameters that were used to describe the current position and orientation of the vehicle and velocity.
+
+* `x`: The x-coordinate
+* `y`: The y-coordinate
+* `psi`: The vehicle orientation
+* `v`: The velocity
+
+#### Actuators
+
+These are the parameters that alter the systems next step. Basically the control variables.
+
+In this model, we are using two primary actuators:
+
+* `δ`: Steering angle
+* `a`: Throttle
+
+The steering angle in this model is limited to [-25, 25] degrees. This brings in some real world dimensionality where the car cannot warp from one position to another. The vehicle's acceleration and braking are combined into a single `throttle` value that can vary between [-1, 1].
+
+#### Update equations
+
+Shown in the image above.
+
+### Timestep Length and Elapsed Duration (N & dt)
+
+`N` - This parameter defines the number of timesteps that the model predicts. The higher the number the more the predictions are. Too many predictions are also not of much use as there are other things that would come into play that are not visible to the vehicle at the current time stamp.
+
+`dt` - The length of each time step. The smaller the value, the more computation that is needed for calculating higher number of possibilities and to get better predictions.
+
+Started off with the values from a classroom assignment of
+```
+N = 25
+dt = 0.5
+```
+These values seemed to give a good outcome, but the model seemed to be a bit slow in predicting the next move. Bumping it down to the following values seemed to give a good result.
+
+```
+N = 10
+dt = 0.1
+```
+
+Other values of N and dt such as (15, 0.1) were also tried and it seemed to make it a bit more smoother, but the resulting calculations seemed higher compared to the result that was seen in the simulator. These values need to tuned based on the real world necessity, such as the vehicles compute power and the targeted speeds. If the vehicle was to be running at only 35 mph, it may not need to predict as far as ahead compared to running at 150 mph.
+
+
+### Polynomial Fitting and MPC Preprocessing
+
+First, the vehicle's coordinates/waypoints are transformed from the global dimension to vehicle's perspective. This was done with the following code:
+
+```cpp
+            for (u_int i = 0; i < ptsx.size(); i++) {
+                double shift_x = ptsx[i] - px;
+                double shift_y = ptsy[i] - py;
+
+                ptsx[i] = shift_x * cos(psi) + shift_y * sin(psi);
+                ptsy[i] = shift_y * cos(psi) - shift_x * sin(psi);
+            }
+```
+
+Then using the `polyfit()` method, a third-degree polynomial equation is generated. This was used to estimate the current road curve that was ahead of the vehicle.
+
+Once the polynomial equation was generated, using the `polyeval()` function, the `cte` and `epsi` values were calculated with the code below. Since the coordinates were transformed, the `x`, `y` and `psi` values are `0`.
+
+```cpp
+double cte = polyeval(coeffs, 0);
+double epsi = -atan(coeffs[1]);
+```
+
+
+
+### Model Predictive Control with Latency
+
+In order to deal with latency, I added a "prediction" step in the `main.cpp` before sending the state to the `Solve` method. The value that it predicts into the future was set to `0.1s => 100ms`.
+
+```cpp
+            const double Lf = 2.67;
+
+            //Predict 0.1s ahead (our dt in MPC is also 0.1)
+            double dt = 0.1;
+
+            //NOTE: Here x, y and psi are all 0 (origin). Hence several values shorten into:
+            double pred_px = v * dt;
+            double pred_py = 0; //sin(0) = 0
+            double pred_psi = - v / Lf * delta * dt;
+            double pred_v = v + a * dt;
+            double pred_cte = cte + (v * sin(epsi) * dt);
+            double pred_epsi = epsi + pred_psi;
+```
+
+---
+
 ## Dependencies
 
 * cmake >= 3.5

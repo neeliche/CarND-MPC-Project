@@ -102,6 +102,7 @@ int main() {
             *
             */
             
+            //Convert to vehicle coordinates
             for (u_int i = 0; i < ptsx.size(); i++) {
                 double shift_x = ptsx[i] - px;
                 double shift_y = ptsy[i] - py;
